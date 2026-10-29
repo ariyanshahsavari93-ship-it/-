@@ -1,11 +1,10 @@
-
 import os
 import json
 import time
 import requests
 from pathlib import Path
 
-TOKEN = os.getenv("BALE_TOKEN", "").strip()
+TOKEN = os.getenv("BALE_TOKEN", "").strip().strip('"').strip("'")
 ADMIN_ID = os.getenv("ADMIN_CHAT_ID", "").strip()
 CHANNEL_URL = "https://ble.ir/khaz_kade1"
 
@@ -13,26 +12,19 @@ API = f"https://tapi.bale.ai/bot{TOKEN}"
 DATA_FILE = Path("bot_data.json")
 
 sessions = {}
-data = {
-    "last_update_id": 0,
-    "tickets": {}
-}
-
+data = {"last_update_id": 0, "tickets": {}}
 http = requests.Session()
 
 
 def load_data():
     global data
-
     try:
         if DATA_FILE.exists():
             saved = json.loads(DATA_FILE.read_text(encoding="utf-8"))
             if isinstance(saved, dict):
                 data.update(saved)
-
         if not isinstance(data.get("tickets"), dict):
             data["tickets"] = {}
-
     except (OSError, ValueError) as error:
         print("خطا در خواندن اطلاعات:", error)
 
@@ -51,7 +43,7 @@ def save_data():
 
 def api(method, payload=None):
     if not TOKEN:
-        return {"ok": False, "description": "BALE_TOKEN تنظیم نشده است"}
+        return {"ok": False, "description": "توکن تنظیم نشده است"}
 
     try:
         response = http.post(
@@ -63,48 +55,31 @@ def api(method, payload=None):
         result = response.json()
 
         if not isinstance(result, dict):
-            return {"ok": False, "description": "پاسخ نامعتبر از API"}
+            return {"ok": False, "description": "پاسخ نامعتبر"}
 
         if result.get("ok") is not True:
             print("خطای API:", result)
 
         return result
-
     except (requests.RequestException, ValueError) as error:
         print("خطای ارتباط با بله:", error)
         return {"ok": False, "description": str(error)}
 
 
 def send(chat_id, text, keyboard=None):
-    payload = {
-        "chat_id": chat_id,
-        "text": text
-    }
-
+    payload = {"chat_id": chat_id, "text": text}
     if keyboard:
         payload["reply_markup"] = keyboard
-
     return api("sendMessage", payload)
 
 
 def main_menu():
     return {
         "keyboard": [
-            [
-                {"text": "🛠 خدمات"},
-                {"text": "📝 ثبت سفارش"}
-            ],
-            [
-                {"text": "📚 آموزش رایگان"},
-                {"text": "📢 ورود به کانال"}
-            ],
-            [
-                {"text": "🕵️ ارتباط با پشتیبانی"}
-            ],
-            [
-                {"text": "ℹ️ راهنما"},
-                {"text": "👨‍💼 مدیریت"}
-            ]
+            [{"text": "🛠 خدمات"}, {"text": "📝 ثبت سفارش"}],
+            [{"text": "📚 آموزش رایگان"}, {"text": "📢 ورود به کانال"}],
+            [{"text": "🕵️ ارتباط با پشتیبانی"}],
+            [{"text": "ℹ️ راهنما"}, {"text": "👨‍💼 مدیریت"}]
         ],
         "resize_keyboard": True
     }
@@ -118,22 +93,20 @@ def start_support(chat_id, mode="support"):
     sessions[str(chat_id)] = {"mode": mode}
 
     if mode == "order":
-        title = "📝 ثبت سفارش"
-        body = (
-            "نوع خدمت و توضیحات سفارش خود را بنویس.\n"
-            "پیامت برای پشتیبانی ارسال می‌شود."
+        message = (
+            "📝 ثبت سفارش\n\n"
+            "نوع خدمت و توضیحات سفارشت را بنویس.\n"
+            "پیامت برای مدیر ارسال می‌شود."
         )
     else:
-        title = "🕵️ ارتباط با پشتیبانی"
-        body = (
-            "پیامت را بنویس و ارسال کن.\n"
-            "متن پیام برای مدیر ارسال می‌شود؛ "
-            "برای پاسخ، ربات باید شناسه گفت‌وگوی تو را داشته باشد."
+        message = (
+            "🕵️ ارتباط با پشتیبانی\n\n"
+            "پیامت را بنویس و ارسال کن تا برای مدیر فرستاده شود."
         )
 
     send(
         chat_id,
-        f"{title}\n\n{body}\n\nبرای لغو بنویس «لغو».",
+        message + "\n\nبرای لغو بنویس «لغو».",
         main_menu()
     )
 
@@ -150,10 +123,10 @@ def handle_support_message(chat_id, text):
             "پشتیبانی هنوز راه‌اندازی نشده است.",
             main_menu()
         )
+        sessions.pop(str(chat_id), None)
         return
 
     ticket_id = str(int(time.time() * 1000))
-
     data["tickets"][ticket_id] = {
         "user_id": str(chat_id),
         "status": "open"
@@ -161,26 +134,26 @@ def handle_support_message(chat_id, text):
     save_data()
 
     keyboard = {
-        "inline_keyboard": [[
-            {
-                "text": "↩️ پاسخ به کاربر",
-                "callback_data": f"reply:{ticket_id}"
-            }
-        ]]
+        "inline_keyboard": [[{
+            "text": "↩️ پاسخ به کاربر",
+            "callback_data": f"reply:{ticket_id}"
+        }]]
     }
 
     result = send(
         ADMIN_ID,
-        "📩 پیام جدید پشتیبانی\n"
+        "📩 پیام جدید خز کده\n"
         f"شماره پیگیری: {ticket_id}\n\n"
         f"متن پیام:\n{text}",
         keyboard
     )
 
+    sessions.pop(str(chat_id), None)
+
     if result.get("ok") is True:
         send(
             chat_id,
-            "✅ پیام تو برای پشتیبانی ارسال شد.\n"
+            "✅ پیامت برای پشتیبانی ارسال شد.\n"
             f"شماره پیگیری: {ticket_id}",
             main_menu()
         )
@@ -192,8 +165,6 @@ def handle_support_message(chat_id, text):
             "❌ ارسال پیام ناموفق بود. کمی بعد دوباره تلاش کن.",
             main_menu()
         )
-
-    sessions.pop(str(chat_id), None)
 
 
 def handle_callback(callback):
@@ -222,7 +193,6 @@ def handle_callback(callback):
         "mode": "admin_reply",
         "ticket_id": ticket_id
     }
-
     send(
         chat_id,
         "✍️ پاسخ خود را به‌صورت متن ارسال کن.\n"
@@ -341,7 +311,7 @@ def handle_message(message):
             chat_id,
             "ℹ️ راهنمای ربات\n\n"
             "از دکمه‌های منو استفاده کن.\n"
-            "برای ارسال پیام، «ارتباط با پشتیبانی» را انتخاب کن.\n"
+            "برای ارسال پیام، «ارتباط با پشتیبانی» را بزن.\n"
             "برای لغو ارسال، بنویس «لغو».",
             main_menu()
         )
@@ -370,6 +340,11 @@ def handle_message(message):
 def main():
     if not TOKEN:
         print("خطا: متغیر BALE_TOKEN تنظیم نشده است.")
+        return
+
+    me = api("getMe")
+    if me.get("ok") is not True:
+        print("توکن یا ارتباط با API مشکل دارد:", me.get("description"))
         return
 
     load_data()
