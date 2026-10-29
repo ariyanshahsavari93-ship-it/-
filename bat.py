@@ -1,3 +1,4 @@
+
 import os
 import json
 import time
@@ -6,13 +7,18 @@ from pathlib import Path
 
 TOKEN = os.getenv("BALE_TOKEN", "").strip()
 ADMIN_ID = os.getenv("ADMIN_CHAT_ID", "").strip()
-
 CHANNEL_URL = "https://ble.ir/khaz_kade1"
-API = f"https://tapi.bale.ai/bot{TOKEN}"
 
+API = f"https://tapi.bale.ai/bot{TOKEN}"
 DATA_FILE = Path("bot_data.json")
+
 sessions = {}
-data = {"next_update_id": None, "tickets": {}}
+data = {
+    "last_update_id": 0,
+    "tickets": {}
+}
+
+http = requests.Session()
 
 
 def load_data():
@@ -20,37 +26,35 @@ def load_data():
 
     try:
         if DATA_FILE.exists():
-            loaded = json.loads(
-                DATA_FILE.read_text(encoding="utf-8")
-            )
-
-            if isinstance(loaded, dict):
-                data.update(loaded)
+            saved = json.loads(DATA_FILE.read_text(encoding="utf-8"))
+            if isinstance(saved, dict):
+                data.update(saved)
 
         if not isinstance(data.get("tickets"), dict):
             data["tickets"] = {}
 
-    except (OSError, json.JSONDecodeError) as error:
+    except (OSError, ValueError) as error:
         print("خطا در خواندن اطلاعات:", error)
 
 
 def save_data():
     try:
-        DATA_FILE.write_text(
+        temp = DATA_FILE.with_suffix(".tmp")
+        temp.write_text(
             json.dumps(data, ensure_ascii=False, indent=2),
             encoding="utf-8"
         )
+        temp.replace(DATA_FILE)
     except OSError as error:
         print("خطا در ذخیره اطلاعات:", error)
 
 
 def api(method, payload=None):
     if not TOKEN:
-        print("خطا: متغیر BALE_TOKEN تنظیم نشده است.")
-        return {}
+        return {"ok": False, "description": "BALE_TOKEN تنظیم نشده است"}
 
     try:
-        response = requests.post(
+        response = http.post(
             f"{API}/{method}",
             json=payload or {},
             timeout=40
@@ -59,7 +63,7 @@ def api(method, payload=None):
         result = response.json()
 
         if not isinstance(result, dict):
-            return {}
+            return {"ok": False, "description": "پاسخ نامعتبر از API"}
 
         if result.get("ok") is not True:
             print("خطای API:", result)
@@ -68,7 +72,7 @@ def api(method, payload=None):
 
     except (requests.RequestException, ValueError) as error:
         print("خطای ارتباط با بله:", error)
-        return {}
+        return {"ok": False, "description": str(error)}
 
 
 def send(chat_id, text, keyboard=None):
@@ -95,7 +99,7 @@ def main_menu():
                 {"text": "📢 ورود به کانال"}
             ],
             [
-                {"text": "🕵️ ارتباط ناشناس با پشتیبانی"}
+                {"text": "🕵️ ارتباط با پشتیبانی"}
             ],
             [
                 {"text": "ℹ️ راهنما"},
@@ -115,23 +119,21 @@ def start_support(chat_id, mode="support"):
 
     if mode == "order":
         title = "📝 ثبت سفارش"
-        instruction = (
+        body = (
             "نوع خدمت و توضیحات سفارش خود را بنویس.\n"
-            "پیام به پشتیبانی ارسال می‌شود."
+            "پیامت برای پشتیبانی ارسال می‌شود."
         )
     else:
-        title = "🕵️ ارتباط ناشناس با پشتیبانی"
-        instruction = (
-            "پیام خود را ارسال کنید؛ این پیام به پشتیبانی "
-            "ارسال می‌شود.\n"
-            "هویت شما در متن پیام نمایش داده نمی‌شود؛ "
-            "ربات برای ارسال پاسخ باید شناسه گفت‌وگوی شما را نگه دارد."
+        title = "🕵️ ارتباط با پشتیبانی"
+        body = (
+            "پیامت را بنویس و ارسال کن.\n"
+            "متن پیام برای مدیر ارسال می‌شود؛ "
+            "برای پاسخ، ربات باید شناسه گفت‌وگوی تو را داشته باشد."
         )
 
     send(
         chat_id,
-        f"{title}\n\n{instruction}\n\n"
-        "برای لغو، بنویسید «لغو».",
+        f"{title}\n\n{body}\n\nبرای لغو بنویس «لغو».",
         main_menu()
     )
 
@@ -148,7 +150,6 @@ def handle_support_message(chat_id, text):
             "پشتیبانی هنوز راه‌اندازی نشده است.",
             main_menu()
         )
-        print("ADMIN_CHAT_ID تنظیم نشده است.")
         return
 
     ticket_id = str(int(time.time() * 1000))
@@ -159,12 +160,6 @@ def handle_support_message(chat_id, text):
     }
     save_data()
 
-    admin_text = (
-        "📩 پیام جدید پشتیبانی\n"
-        f"شماره پیگیری: {ticket_id}\n\n"
-        f"متن پیام:\n{text}"
-    )
-
     keyboard = {
         "inline_keyboard": [[
             {
@@ -174,25 +169,31 @@ def handle_support_message(chat_id, text):
         ]]
     }
 
-    result = send(ADMIN_ID, admin_text, keyboard)
+    result = send(
+        ADMIN_ID,
+        "📩 پیام جدید پشتیبانی\n"
+        f"شماره پیگیری: {ticket_id}\n\n"
+        f"متن پیام:\n{text}",
+        keyboard
+    )
 
     if result.get("ok") is True:
         send(
             chat_id,
-            "✅ پیام شما برای پشتیبانی ارسال شد.\n"
-            f"شماره پیگیری: {ticket_id}\n"
-            "پاسخ پشتیبانی در همین گفت‌وگو ارسال می‌شود.",
+            "✅ پیام تو برای پشتیبانی ارسال شد.\n"
+            f"شماره پیگیری: {ticket_id}",
             main_menu()
         )
-        sessions.pop(str(chat_id), None)
     else:
         data["tickets"].pop(ticket_id, None)
         save_data()
         send(
             chat_id,
-            "❌ ارسال پیام موفق نبود. لطفاً کمی بعد دوباره تلاش کنید.",
+            "❌ ارسال پیام ناموفق بود. کمی بعد دوباره تلاش کن.",
             main_menu()
         )
+
+    sessions.pop(str(chat_id), None)
 
 
 def handle_callback(callback):
@@ -202,14 +203,9 @@ def handle_callback(callback):
     chat_id = str((message.get("chat") or {}).get("id", ""))
 
     if callback_id:
-        api(
-            "answerCallbackQuery",
-            {"callback_query_id": callback_id}
-        )
+        api("answerCallbackQuery", {"callback_query_id": callback_id})
 
     if not is_admin(chat_id):
-        if chat_id:
-            send(chat_id, "این دکمه فقط برای مدیر پشتیبانی است.")
         return
 
     if not callback_data.startswith("reply:"):
@@ -219,7 +215,7 @@ def handle_callback(callback):
     ticket = data["tickets"].get(ticket_id)
 
     if not ticket:
-        send(chat_id, "این درخواست پیدا نشد یا اطلاعات آن موجود نیست.")
+        send(chat_id, "درخواست پیدا نشد یا اطلاعات آن موجود نیست.")
         return
 
     sessions[chat_id] = {
@@ -229,9 +225,8 @@ def handle_callback(callback):
 
     send(
         chat_id,
-        "✍️ پاسخ به کاربر\n\n"
-        "متن پاسخ خود را در همین گفت‌وگو بفرست.\n"
-        "برای لغو، بنویسید «لغو»."
+        "✍️ پاسخ خود را به‌صورت متن ارسال کن.\n"
+        "برای لغو بنویس «لغو»."
     )
 
 
@@ -244,11 +239,7 @@ def handle_message(message):
         return
 
     if text == "/id":
-        send(
-            chat_id,
-            f"شناسه این گفت‌وگو:\n{chat_id}\n\n"
-            "این شناسه را در متغیر ADMIN_CHAT_ID تنظیم کن."
-        )
+        send(chat_id, f"شناسه این گفت‌وگو:\n{chat_id}")
         return
 
     if text == "/start":
@@ -281,7 +272,7 @@ def handle_message(message):
             return
 
         if not text:
-            send(chat_id, "لطفاً پاسخ را به‌صورت متن ارسال کن.")
+            send(chat_id, "لطفاً پاسخ را به‌صورت متن بفرست.")
             return
 
         ticket_id = session.get("ticket_id")
@@ -292,10 +283,8 @@ def handle_message(message):
             send(chat_id, "درخواست پیدا نشد.")
             return
 
-        user_id = ticket.get("user_id")
-
         result = send(
-            user_id,
+            ticket["user_id"],
             "📬 پاسخ پشتیبانی:\n\n" + text,
             main_menu()
         )
@@ -303,21 +292,14 @@ def handle_message(message):
         if result.get("ok") is True:
             ticket["status"] = "answered"
             save_data()
-            send(chat_id, "✅ پاسخ ارسال شد.")
+            send(chat_id, "✅ پاسخ برای کاربر ارسال شد.")
         else:
-            send(
-                chat_id,
-                "❌ ارسال پاسخ موفق نبود. ممکن است کاربر ربات را مسدود کرده باشد."
-            )
+            send(chat_id, "❌ ارسال پاسخ ناموفق بود.")
 
         sessions.pop(chat_id, None)
         return
 
-    if text in (
-        "🕵️ ارتباط ناشناس با پشتیبانی",
-        "پشتیبانی",
-        "support"
-    ):
+    if text in ("🕵️ ارتباط با پشتیبانی", "پشتیبانی"):
         start_support(chat_id)
         return
 
@@ -329,7 +311,7 @@ def handle_message(message):
             "• طراحی سایت\n"
             "• برنامه‌نویسی و ساخت ابزار\n"
             "• ساخت فونت و استیکر\n\n"
-            "برای سفارش، گزینه «ثبت سفارش» را انتخاب کن.",
+            "برای ثبت درخواست، «ثبت سفارش» را بزن.",
             main_menu()
         )
         return
@@ -349,7 +331,7 @@ def handle_message(message):
     if text in ("📢 ورود به کانال", "کانال"):
         send(
             chat_id,
-            "📢 کانال خز کده:\n" + CHANNEL_URL,
+            "📢 ورود به کانال خز کده:\n" + CHANNEL_URL,
             main_menu()
         )
         return
@@ -359,8 +341,8 @@ def handle_message(message):
             chat_id,
             "ℹ️ راهنمای ربات\n\n"
             "از دکمه‌های منو استفاده کن.\n"
-            "برای ارتباط با پشتیبانی، گزینه ارتباط ناشناس را بزن.\n"
-            "برای لغو پیام پشتیبانی، بنویس «لغو».",
+            "برای ارسال پیام، «ارتباط با پشتیبانی» را انتخاب کن.\n"
+            "برای لغو ارسال، بنویس «لغو».",
             main_menu()
         )
         return
@@ -369,9 +351,9 @@ def handle_message(message):
         if is_admin(chat_id):
             send(
                 chat_id,
-                "👨‍💼 پنل مدیر\n\n"
-                "پیام‌های پشتیبانی به این گفت‌وگو ارسال می‌شوند.\n"
-                "برای پاسخ، دکمه «پاسخ به کاربر» را بزن.",
+                "👨‍💼 پنل مدیریت\n\n"
+                "پیام‌های پشتیبانی به این گفت‌وگو می‌آیند.\n"
+                "برای پاسخ، دکمه زیر پیام را بزن.",
                 main_menu()
             )
         else:
@@ -380,7 +362,7 @@ def handle_message(message):
 
     send(
         chat_id,
-        "متوجه درخواستت نشدم. از دکمه‌های منو استفاده کن یا «راهنما» را بزن.",
+        "متوجه درخواستت نشدم. از دکمه‌های منو استفاده کن.",
         main_menu()
     )
 
@@ -390,24 +372,16 @@ def main():
         print("خطا: متغیر BALE_TOKEN تنظیم نشده است.")
         return
 
-    if not ADMIN_ID:
-        print("هشدار: متغیر ADMIN_CHAT_ID تنظیم نشده است.")
-
     load_data()
-    print("ربات خز کده شروع به کار کرد.")
+    print("ربات خز کده اجرا شد.")
 
-    offset = data.get("next_update_id")
+    offset = int(data.get("last_update_id", 0)) + 1
 
     while True:
         try:
-            payload = {"timeout": 25}
-
-            if offset is not None:
-                payload["offset"] = offset
-
-            response = requests.get(
+            response = http.get(
                 f"{API}/getUpdates",
-                params=payload,
+                params={"timeout": 25, "offset": offset},
                 timeout=35
             )
             response.raise_for_status()
@@ -421,24 +395,26 @@ def main():
             for update in result.get("result", []):
                 update_id = update.get("update_id")
 
-                if update_id is not None:
-                    offset = update_id + 1
-                    data["next_update_id"] = offset
-                    save_data()
+                if update_id is None or update_id < offset:
+                    continue
 
-                if update.get("callback_query"):
-                    handle_callback(update["callback_query"])
-                elif update.get("message"):
-                    handle_message(update["message"])
+                try:
+                    if update.get("callback_query"):
+                        handle_callback(update["callback_query"])
+                    elif update.get("message"):
+                        handle_message(update["message"])
+                except Exception as error:
+                    print("خطا در پردازش پیام:", error)
+
+                offset = update_id + 1
+                data["last_update_id"] = update_id
+                save_data()
 
         except KeyboardInterrupt:
             print("ربات متوقف شد.")
             break
-        except (requests.RequestException, ValueError, KeyError) as error:
-            print("خطا:", error)
-            time.sleep(3)
-        except Exception as error:
-            print("خطای پیش‌بینی‌نشده:", error)
+        except (requests.RequestException, ValueError) as error:
+            print("خطای ارتباط:", error)
             time.sleep(3)
 
 
